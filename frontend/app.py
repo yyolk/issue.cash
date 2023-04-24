@@ -155,7 +155,7 @@ def handler(event, context):
         index_html = index_template.render(
             issuers=ISSUERS,
             cached_length=cached_length.seconds,
-            max_age=CACHE_MAX_AGE,
+            cache_max_age=CACHE_MAX_AGE,
         )
         return {
             "statusCode": 200,

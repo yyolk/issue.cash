@@ -192,7 +192,7 @@
            <em>
                Cached results, refresh in
                <span id="refreshTimerTime">
-                   {{ 300 - cached_length }}
+                   {{ cache_max_age - cached_length }}
                </span>
                seconds &hellip;
            </em>
@@ -218,16 +218,20 @@
       document.body.appendChild(el);
       document.body.appendChild(el2);
    }
-   setInterval(() => {
+   const refreshTimerClearEvent = new Event('refreshTimerClear');
+   const refreshTimerInterval = setInterval(() => {
         const refreshTimerTimeEl = document.getElementById("refreshTimerTime");
         const currentTime = parseInt(refreshTimerTimeEl.textContent);
         const newTime = currentTime - 1;
         if (newTime >= 0) {
           refreshTimerTimeEl.textContent = newTime;
         } else {
-          clearInterval(this);
+          document.dispatchEvent(refreshTimerClearEvent);
         }
    }, 1000);
+   document.addEventListener("refreshTimerClear", () => {
+       clearInterval(refreshTimerInterval);
+   });
    </script>
 </body>
 </html>

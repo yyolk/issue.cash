@@ -153,6 +153,13 @@ class CdkStack(cdk.Stack):
             timeout=cdk.Duration.seconds(900),
             memory_size=512,
         )
+        # definition=tasks.LambdaInvoke(
+        #     self,
+        #     "GenerateFaucetWalletTask",
+        #     lambda_function=generate_faucet_wallet_function,
+        #     result_selector={"issuer_wallet.$", "$.Payload.issuers"},
+        #     output_path="$.issuer_wallet",
+        # ).next(
 
         state_machine = sfn.StateMachine(
             self,
@@ -164,99 +171,196 @@ class CdkStack(cdk.Stack):
             #         lambda_function=generate_faucet_wallet_function,
             #     )
             # )
-            definition=tasks.LambdaInvoke(
+            definition=sfn.Map(
                 self,
-                "GenerateFaucetWalletTask",
-                lambda_function=generate_faucet_wallet_function,
-            ).next(
+                "GenerateIssuerWallets",
+                # not relevant with output_path changed above
+                items_path="$.issuers",
+                #
+                #
+                # concurrency
+                #
+                # works pretty good with the faucet endpoint, this is also
+                # the expected max txns the faucet can put in a single
+                # ledger
+                max_concurrency=10,
+                # result_path=
+            ).iterator(
                 tasks.LambdaInvoke(
                     self,
-                    "GenerateIssuers",
-                    input_path="$.Payload",
-                    lambda_function=generate_issuers_function,
-                    # what are we picking from the output?
-                    result_selector={"issuers.$": "$.Payload.issuers"},
+                    "GenerateIssuerWalletFromFaucet",
+                    lambda_function=generate_faucet_wallet_function,
+                    # parameters=
+                    # pick from the output
+                    result_selector={
+                        "seed.$": "$.Payload.seed",
+                        "account.$": "$.Payload.account",
+                    },
+                    # place the output in the state
+                    result_path="$.issuer_wallet",
                 )
+                .next(
+                    tasks.LambdaInvoke(
+                        self,
+                        "GenerateIssuersNew",
+                        # input_path="$.Payload",
+                        lambda_function=generate_issuers_function,
+                        # what are we picking from the output?
+                        result_selector={"issuers.$": "$.Payload.issuers"},
+                    )
+                )
+                .next(
+                    tasks.LambdaInvoke(
+                        self,
+                        "GrabIssuerOrderBookTask",
+                        lambda_function=grab_order_book_function,
+                        # what are we picking from output?
+                        result_selector={
+                            "work.$": "$.Payload.distinct_accounts",
+                        },
+                        # where do we put the output in the state?
+                        result_path="$.orders",
+                    )
+                )
+                .next(
+                    sfn.Map(
+                        self,
+                        "GenerateOrderWalletsNew",
+                        items_path="$.orders.work",
+                        max_concurrency=3,
+                        result_path=sfn.JsonPath.DISCARD,
+                    ).iterator(
+                        tasks.LambdaInvoke(
+                            self,
+                            "GenerateOrderWalletFromFaucetNew",
+                            lambda_function=generate_faucet_wallet_function,
+                            # parameters=
+                            # pick from the output
+                            result_selector={
+                                "seed.$": "$.Payload.seed",
+                                "account.$": "$.Payload.account",
+                            },
+                            # place the output in the state
+                            result_path="$.wallet",
+                        )
+                        .next(
+                            tasks.LambdaInvoke(
+                                self,
+                                "GenerateOrdersFromStateNew",
+                                lambda_function=generate_orders_function,
+                            )
+                        )
+                        .next(sfn.Succeed(self, "DistinctOrdersCreatedNew"))
+                    )
+                )
+                .next(
+                    tasks.LambdaInvoke(
+                        self,
+                        "PersistIssuersNew",
+                        lambda_function=persist_issuers_function,
+                    )
+                )
+                .next(sfn.Succeed(self, "CreatedIssuerWallets"))
             )
             # .next(
             #     tasks.LambdaInvoke(
             #         self,
             #         "GenerateFaucetWalletTask",
             #         lambda_function=generate_faucet_wallet_function,
+            #         # result_selector={"issuer_wallet.$": "$.Payload.issuers"},
+            #         result_selector={"issuer_wallet.$": "$.Payload"},
+            #         # output_path="$.Payload",
             #     )
             # )
-            .next(
-                tasks.LambdaInvoke(
-                    self,
-                    "GrabOrderBookTask",
-                    lambda_function=grab_order_book_function,
-                    # what are we picking from output?
-                    result_selector={
-                        "work.$": "$.Payload.distinct_accounts",
-                    },
-                    # where do we put the output in the state?
-                    result_path="$.orders",
-                )
-            )
-            .next(
-                sfn.Map(
-                    self,
-                    "GenerateOrderWallets",
-                    # not relevant with output_path changed above
-                    items_path="$.orders.work",
-                    # parameters={
-                    #     "issuers.$": "$.issuers",
-                    #     "work.$": "$.orders.work",
-                    # },
-                    #
-                    #
-                    # concurrency
-                    #
-                    # works pretty good with the faucet endpoint, this is also
-                    # the expected max txns the faucet can put in a single
-                    # ledger
-                    max_concurrency=3,
-                    # max_concurrency=4,
-                    # max_concurrency=5,
-                    # max_concurrency=10,
-                    # CRAZZZY
-                    # max_concurrency=30,
-                    #
-                    #
-                    # results
-                    #
-                    # does this work?
-                    result_path=sfn.JsonPath.DISCARD,
-                ).iterator(
-                    tasks.LambdaInvoke(
-                        self,
-                        "GenerateOrderWalletFromFaucet",
-                        lambda_function=generate_faucet_wallet_function,
-                        # parameters=
-                        # pick from the output
-                        result_selector={
-                            "seed.$": "$.Payload.seed",
-                            "account.$": "$.Payload.account",
-                        },
-                        # place the output in the state
-                        result_path="$.wallet",
-                    )
-                    .next(
-                        tasks.LambdaInvoke(
-                            self,
-                            "GenerateOrdersFromState",
-                            lambda_function=generate_orders_function,
-                        )
-                    )
-                    .next(sfn.Succeed(self, "DistinctOrdersCreated"))
-                )
-            )
-            .next(
-                tasks.LambdaInvoke(
-                    self,
-                    "PersistIssuers",
-                    lambda_function=persist_issuers_function,
-                )
-            )
+            # .next(
+            #     tasks.LambdaInvoke(
+            #         self,
+            #         "GenerateIssuers",
+            #         # input_path="$.Payload",
+            #         lambda_function=generate_issuers_function,
+            #         # what are we picking from the output?
+            #         result_selector={"issuers.$": "$.Payload.issuers"},
+            #     )
+            # )
+            # # .next(
+            # #     tasks.LambdaInvoke(
+            # #         self,
+            # #         "GenerateFaucetWalletTask",
+            # #         lambda_function=generate_faucet_wallet_function,
+            # #     )
+            # # )
+            # .next(
+            #     tasks.LambdaInvoke(
+            #         self,
+            #         "GrabOrderBookTask",
+            #         lambda_function=grab_order_book_function,
+            #         # what are we picking from output?
+            #         result_selector={
+            #             "work.$": "$.Payload.distinct_accounts",
+            #         },
+            #         # where do we put the output in the state?
+            #         result_path="$.orders",
+            #     )
+            # )
+            # .next(
+            #     sfn.Map(
+            #         self,
+            #         "GenerateOrderWallets",
+            #         # not relevant with output_path changed above
+            #         items_path="$.orders.work",
+            #         # parameters={
+            #         #     "issuers.$": "$.issuers",
+            #         #     "work.$": "$.orders.work",
+            #         # },
+            #         #
+            #         #
+            #         # concurrency
+            #         #
+            #         # works pretty good with the faucet endpoint, this is also
+            #         # the expected max txns the faucet can put in a single
+            #         # ledger
+            #         max_concurrency=3,
+            #         # max_concurrency=4,
+            #         # max_concurrency=5,
+            #         # max_concurrency=10,
+            #         # CRAZZZY
+            #         # max_concurrency=30,
+            #         #
+            #         #
+            #         # results
+            #         #
+            #         # does this work?
+            #         result_path=sfn.JsonPath.DISCARD,
+            #     ).iterator(
+            #         tasks.LambdaInvoke(
+            #             self,
+            #             "GenerateOrderWalletFromFaucet",
+            #             lambda_function=generate_faucet_wallet_function,
+            #             # parameters=
+            #             # pick from the output
+            #             result_selector={
+            #                 "seed.$": "$.Payload.seed",
+            #                 "account.$": "$.Payload.account",
+            #             },
+            #             # place the output in the state
+            #             result_path="$.wallet",
+            #         )
+            #         .next(
+            #             tasks.LambdaInvoke(
+            #                 self,
+            #                 "GenerateOrdersFromState",
+            #                 lambda_function=generate_orders_function,
+            #             )
+            #         )
+            #         .next(sfn.Succeed(self, "DistinctOrdersCreated"))
+            #     )
+            # )
+            # .next(
+            #     tasks.LambdaInvoke(
+            #         self,
+            #         "PersistIssuers",
+            #         lambda_function=persist_issuers_function,
+            #     )
+            # )
             .next(sfn.Succeed(self, "CreatedMarket")),
         )

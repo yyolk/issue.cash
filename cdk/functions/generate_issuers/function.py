@@ -29,8 +29,9 @@ testnet_client = JsonRpcClient("https://s.altnet.rippletest.net:51234")
 
 
 def handler(event, context):
-    wallet_seed = event["seed"]
-    wallet_account = event["account"]
+    wallet_seed = event["issuer_wallet"]["seed"]
+    wallet_account = event["issuer_wallet"]["account"]
+    issuer_currency = event["currency"]
     issuer_wallet = Wallet(seed=wallet_seed, sequence=None)
 
     issuer_wallet_set_tx_missing = AccountSet(
@@ -51,7 +52,7 @@ def handler(event, context):
 
     return {
         "issuers": {
-            "USD": {"seed": wallet_seed, "acct": wallet_account},
+            issuer_currency: {"seed": wallet_seed, "acct": wallet_account},
             # TODO expand to all issuers
             # "dfg": {"seed": "123", "acct": "abc123"},
         }
